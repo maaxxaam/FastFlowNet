@@ -1,13 +1,21 @@
 import os
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
+from ..involution import Involution2D
 from .correlation_package.correlation import Correlation
 
 
 def convrelu(in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True):
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias=bias), 
+        nn.LeakyReLU(0.1, inplace=True)
+    )
+
+
+def invrelu(in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True):
+    return nn.Sequential(
+        Involution2d(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias=bias), 
         nn.LeakyReLU(0.1, inplace=True)
     )
 
@@ -21,13 +29,13 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.in_channels = in_channels
         self.groups = groups
-        self.conv1 = convrelu(in_channels, 96, 3, 1)
-        self.conv2 = convrelu(96, 96, 3, 1, groups=groups)
-        self.conv3 = convrelu(96, 96, 3, 1, groups=groups)
-        self.conv4 = convrelu(96, 96, 3, 1, groups=groups)
-        self.conv5 = convrelu(96, 64, 3, 1)
-        self.conv6 = convrelu(64, 32, 3, 1)
-        self.conv7 = nn.Conv2d(32, 2, 3, 1, 1)
+        self.conv1 = invrelu(in_channels, 96, 3, 1)
+        self.conv2 = invrelu(96, 96, 3, 1, groups=groups)
+        self.conv3 = invrelu(96, 96, 3, 1, groups=groups)
+        self.conv4 = invrelu(96, 96, 3, 1, groups=groups)
+        self.conv5 = invrelu(96, 64, 3, 1)
+        self.conv6 = invrelu(64, 32, 3, 1)
+        self.conv7 = Involution2d(32, 2, 3, 1, 1)
 
 
     def channel_shuffle(self, x, groups):
@@ -41,28 +49,26 @@ class Decoder(nn.Module):
 
     def forward(self, x):
         if self.groups == 1:
-            out = self.conv7(self.conv6(self.conv5(self.conv4(self.conv3(self.conv2(self.conv1(x)))))))
-        else:
-            out = self.conv1(x)
-            out = self.channel_shuffle(self.conv2(out), self.groups)
-            out = self.channel_shuffle(self.conv3(out), self.groups)
-            out = self.channel_shuffle(self.conv4(out), self.groups)
-            out = self.conv7(self.conv6(self.conv5(out)))
-        return out
+            return self.conv7(self.conv6(self.conv5(self.conv4(self.conv3(self.conv2(self.conv1(x)))))))
+        out = self.conv1(x)
+        out = self.channel_shuffle(self.conv2(out), self.groups)
+        out = self.channel_shuffle(self.conv3(out), self.groups)
+        out = self.channel_shuffle(self.conv4(out), self.groups)
+        return self.conv7(self.conv6(self.conv5(out)))
 
 
 class FastFlowNet(nn.Module):
     def __init__(self, groups=3):
         super(FastFlowNet, self).__init__()
         self.groups = groups
-        self.pconv1_1 = convrelu(3, 16, 3, 2)
-        self.pconv1_2 = convrelu(16, 16, 3, 1)
-        self.pconv2_1 = convrelu(16, 32, 3, 2)
-        self.pconv2_2 = convrelu(32, 32, 3, 1)
-        self.pconv2_3 = convrelu(32, 32, 3, 1)
-        self.pconv3_1 = convrelu(32, 64, 3, 2)
-        self.pconv3_2 = convrelu(64, 64, 3, 1)
-        self.pconv3_3 = convrelu(64, 64, 3, 1)
+        self.pconv1_1 = invrelu(3, 16, 3, 2)
+        self.pconv1_2 = invrelu(16, 16, 3, 1)
+        self.pconv2_1 = invrelu(16, 32, 3, 2)
+        self.pconv2_2 = invrelu(32, 32, 3, 1)
+        self.pconv2_3 = invrelu(32, 32, 3, 1)
+        self.pconv3_1 = invrelu(32, 64, 3, 2)
+        self.pconv3_2 = invrelu(64, 64, 3, 1)
+        self.pconv3_3 = invrelu(64, 64, 3, 1)
 
         self.corr = Correlation(pad_size=4, kernel_size=1, max_displacement=4, stride1=1, stride2=1, corr_multiply=1)
         self.index = torch.tensor([0, 2, 4, 6, 8, 
@@ -75,11 +81,11 @@ class FastFlowNet(nn.Module):
                 64, 66, 68, 70, 
                 72, 74, 76, 78, 80])
 
-        self.rconv2 = convrelu(32, 32, 3, 1)
-        self.rconv3 = convrelu(64, 32, 3, 1)
-        self.rconv4 = convrelu(64, 32, 3, 1)
-        self.rconv5 = convrelu(64, 32, 3, 1)
-        self.rconv6 = convrelu(64, 32, 3, 1)
+        self.rconv2 = invrelu(32, 32, 3, 1)
+        self.rconv3 = invrelu(64, 32, 3, 1)
+        self.rconv4 = invrelu(64, 32, 3, 1)
+        self.rconv5 = invrelu(64, 32, 3, 1)
+        self.rconv6 = invrelu(64, 32, 3, 1)
 
         self.up3 = deconv(2, 2)
         self.up4 = deconv(2, 2)
@@ -93,7 +99,7 @@ class FastFlowNet(nn.Module):
         self.decoder6 = Decoder(87, groups)
         
         for m in self.modules():
-            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+            if isinstance(m, Involution2d) or isinstance(m, nn.ConvTranspose2d):
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
